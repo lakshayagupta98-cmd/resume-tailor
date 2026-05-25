@@ -1,4 +1,9 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import * as pdfjsLib from "pdfjs-dist";
+import mammoth from "mammoth";
+
+// Set up PDF.js worker
+pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js`;
 
 const STORAGE_KEY = "resumeTailorHistory";
 const loadHistory = () => { try { const r = localStorage.getItem(STORAGE_KEY); return r ? JSON.parse(r) : []; } catch { return []; } };
@@ -51,10 +56,106 @@ function exportToPDF(content, title) {
   w.document.close();
 }
 
+async function extractTextFromPDF(file) {
+  const arrayBuffer = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  let text = "";
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page = await pdf.getPage(i);
+    const content = await page.getTextContent();
+    text += content.items.map(item => item.str).join(" ") + "\n";
+  }
+  return text.trim();
+}
+
+async function extractTextFromDOCX(file) {
+  const arrayBuffer = await file.arrayBuffer();
+  const result = await mammoth.extractRawText({ arrayBuffer });
+  return result.value.trim();
+}
+
 const scoreColor = s => s >= 80 ? "#1a7a3c" : s >= 60 ? "#b07800" : "#c0392b";
 const scoreBg = s => s >= 80 ? "#eafaf1" : s >= 60 ? "#fef9e7" : "#fdf0ee";
 const S = { INPUT:"input", LOADING:"loading", RESULT:"result", HISTORY:"history" };
 
+// ── File Upload Zone ─────────────────────────────────────────────────────────
+function FileUploadZone({ onTextExtracted, currentText, label }) {
+  const [dragging, setDragging] = useState(false);
+  const [fileName, setFileName] = useState("");
+  const [extracting, setExtracting] = useState(false);
+  const [error, setError] = useState("");
+  const inputRef = useRef();
+
+  const handleFile = async (file) => {
+    if (!file) return;
+    const ext = file.name.split(".").pop().toLowerCase();
+    if (!["pdf","docx","doc","txt"].includes(ext)) {
+      setError("Only PDF, DOCX, DOC, or TXT files supported."); return;
+    }
+    setError(""); setExtracting(true); setFileName(file.name);
+    try {
+      let text = "";
+      if (ext === "pdf") text = await extractTextFromPDF(file);
+      else if (ext === "docx" || ext === "doc") text = await extractTextFromDOCX(file);
+      else text = await file.text();
+      onTextExtracted(text);
+    } catch(e) {
+      setError("Could not read file — try copying and pasting the text instead.");
+      setFileName("");
+    } finally { setExtracting(false); }
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault(); setDragging(false);
+    handleFile(e.dataTransfer.files[0]);
+  };
+
+  const handleClear = () => { setFileName(""); setError(""); onTextExtracted(""); };
+
+  return (
+    <div>
+      <div
+        onClick={() => !fileName && inputRef.current.click()}
+        onDragOver={e => { e.preventDefault(); setDragging(true); }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={handleDrop}
+        style={{
+          border: `2px dashed ${dragging ? "#3a6fd8" : fileName ? "#1a7a3c" : "#d0d8f0"}`,
+          borderRadius: "8px", padding: "20px", textAlign: "center",
+          background: dragging ? "#eef2fb" : fileName ? "#eafaf1" : "#fafbff",
+          cursor: fileName ? "default" : "pointer", transition: "all 0.2s",
+          marginBottom: "8px"
+        }}
+      >
+        {extracting ? (
+          <div style={{color:"#3a6fd8", fontFamily:"monospace", fontSize:"12px"}}>
+            <div style={{width:"20px",height:"20px",border:"2px solid #e0e4ef",borderTop:"2px solid #3a6fd8",borderRadius:"50%",margin:"0 auto 8px",animation:"spin 0.9s linear infinite"}}/>
+            Extracting text from {fileName}...
+          </div>
+        ) : fileName ? (
+          <div style={{display:"flex", alignItems:"center", justifyContent:"center", gap:"12px"}}>
+            <span style={{fontSize:"20px"}}>📄</span>
+            <div style={{textAlign:"left"}}>
+              <div style={{fontSize:"13px", fontWeight:"600", color:"#1a7a3c"}}>{fileName}</div>
+              <div style={{fontSize:"11px", color:"#a0a8c0", fontFamily:"monospace"}}>{currentText.length.toLocaleString()} chars extracted</div>
+            </div>
+            <button onClick={e=>{e.stopPropagation(); handleClear();}} style={{background:"#fdf0ee", border:"1px solid #f5c0c0", color:"#c0392b", padding:"4px 10px", borderRadius:"4px", fontSize:"11px", cursor:"pointer", fontFamily:"monospace", marginLeft:"8px"}}>✕ Remove</button>
+          </div>
+        ) : (
+          <div>
+            <div style={{fontSize:"28px", marginBottom:"8px"}}>📎</div>
+            <div style={{fontSize:"13px", fontWeight:"600", color:"#3a6fd8", marginBottom:"4px"}}>Drop your {label} here</div>
+            <div style={{fontSize:"11px", color:"#a0a8c0", fontFamily:"monospace"}}>PDF, DOCX, DOC, TXT · or click to browse</div>
+          </div>
+        )}
+      </div>
+      {error && <div style={{fontSize:"11px", color:"#c0392b", fontFamily:"monospace", marginBottom:"6px"}}>{error}</div>}
+      <input ref={inputRef} type="file" accept=".pdf,.docx,.doc,.txt" style={{display:"none"}} onChange={e=>handleFile(e.target.files[0])}/>
+    </div>
+  );
+}
+
+// ── Main Component ────────────────────────────────────────────────────────────
 export default function ResumeTailorPro() {
   const [stage, setStage] = useState(S.INPUT);
   const [masterResume, setMasterResume] = useState("");
@@ -69,6 +170,8 @@ export default function ResumeTailorPro() {
   const [history, setHistory] = useState([]);
   const [dot, setDot] = useState(0);
   const [step, setStep] = useState(0);
+  const [resumeMode, setResumeMode] = useState("paste"); // "paste" | "upload"
+  const [jdMode, setJdMode] = useState("paste"); // "paste" | "upload"
 
   const STEPS = ["Reading job description", "Matching your experience", "Optimizing for ATS", "Writing resume & cover letter"];
 
@@ -83,7 +186,7 @@ export default function ResumeTailorPro() {
 
   const handleTailor = async () => {
     if (!masterResume.trim() || !jobDescription.trim()) {
-      setError("Please paste both your resume and the job description."); return;
+      setError("Please provide both your resume and the job description."); return;
     }
     setError(""); setStage(S.LOADING); setStep(0);
     const msg = `MASTER RESUME:\n${masterResume}\n\n---\n\nJOB TITLE: ${jobTitle||"Not specified"}\nCOMPANY: ${company||"Not specified"}\nJOB DESCRIPTION:\n${jobDescription}\n\nReturn JSON only.`;
@@ -114,14 +217,22 @@ export default function ResumeTailorPro() {
 
   const handleCopy = () => { navigator.clipboard.writeText(result?.tailoredResume||""); setCopied(true); setTimeout(()=>setCopied(false),2000); };
   const handleCopyCL = () => { navigator.clipboard.writeText(result?.coverLetter||""); setCopiedCL(true); setTimeout(()=>setCopiedCL(false),2000); };
-  const handleReset = () => { setStage(S.INPUT); setResult(null); setError(""); setJobTitle(""); setJobDescription(""); setCompany(""); };
+  const handleReset = () => { setStage(S.INPUT); setResult(null); setError(""); setJobTitle(""); setJobDescription(""); setCompany(""); setMasterResume(""); setResumeMode("paste"); setJdMode("paste"); };
   const loadFromHistory = e => { setResult(e); setJobTitle(e.jobTitle); setCompany(e.company||""); setMasterResume(e.originalResume||""); setStage(S.RESULT); setActiveTab("resume"); };
   const diffLines = result ? computeDiff(masterResume, result.tailoredResume) : [];
 
+  const ModeToggle = ({ mode, setMode }) => (
+    <div style={{display:"flex", background:"#f0f2f8", borderRadius:"6px", padding:"2px", gap:"2px", marginBottom:"8px", width:"fit-content"}}>
+      {[["paste","✏ Paste"],["upload","📎 Upload"]].map(([m,label])=>(
+        <button key={m} onClick={()=>setMode(m)} style={{background:mode===m?"#ffffff":"transparent", border:"none", padding:"5px 14px", fontSize:"11px", fontFamily:"monospace", color:mode===m?"#3a6fd8":"#a0a8c0", cursor:"pointer", borderRadius:"4px", fontWeight:mode===m?"600":"400", transition:"all 0.15s", boxShadow:mode===m?"0 1px 3px rgba(0,0,0,0.1)":"none"}}>
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+
   return (
     <div style={{minHeight:"100vh", background:"#f5f6fa", color:"#1a1a2e", fontFamily:"Georgia,serif"}}>
-
-      {/* NAV */}
       <nav style={{background:"#ffffff", borderBottom:"1px solid #e0e4ef", padding:"14px 36px", display:"flex", justifyContent:"space-between", alignItems:"center", boxShadow:"0 1px 4px rgba(0,0,0,0.06)"}}>
         <div style={{display:"flex", alignItems:"center", gap:"12px"}}>
           <span style={{fontSize:"20px", color:"#3a6fd8"}}>◈</span>
@@ -142,10 +253,9 @@ export default function ResumeTailorPro() {
         {stage===S.INPUT&&(
           <div>
             {error&&<div style={{background:"#fff0f0", border:"1px solid #f5c0c0", padding:"11px 16px", borderRadius:"6px", color:"#c0392b", fontSize:"13px", marginBottom:"22px", fontFamily:"monospace"}}>{error}</div>}
-
             <div style={{textAlign:"center", marginBottom:"32px"}}>
               <h1 style={{fontSize:"28px", fontWeight:"600", color:"#1a1a2e", margin:"0 0 8px"}}>AI Resume Tailor</h1>
-              <p style={{fontSize:"14px", color:"#6a7090", margin:0}}>Paste your resume + job description → get a tailored resume <span style={{color:"#3a6fd8", fontWeight:"600"}}>& cover letter</span> in seconds</p>
+              <p style={{fontSize:"14px", color:"#6a7090", margin:0}}>Upload or paste your resume + job description → get a tailored resume <span style={{color:"#3a6fd8", fontWeight:"600"}}>& cover letter</span> in seconds</p>
             </div>
 
             <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:"14px", marginBottom:"18px"}}>
@@ -154,14 +264,49 @@ export default function ResumeTailorPro() {
             </div>
 
             <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:"20px", marginBottom:"28px"}}>
-              <Fld label="Master Resume" badge="your full experience">
-                <textarea value={masterResume} onChange={e=>setMasterResume(e.target.value)} placeholder={"Paste your complete resume here.\n\nInclude every job, skill, certification,\nand achievement. The more complete,\nthe better the tailoring."} style={{...taSt, height:"400px"}}/>
-                <Cnt n={masterResume.length}/>
-              </Fld>
-              <Fld label="Job Description" badge="full JD preferred">
-                <textarea value={jobDescription} onChange={e=>setJobDescription(e.target.value)} placeholder={"Paste the full job description here.\n\nInclude responsibilities, requirements,\nand nice-to-haves. More detail =\nbetter keyword matching."} style={{...taSt, height:"400px"}}/>
-                <Cnt n={jobDescription.length}/>
-              </Fld>
+              {/* Resume input */}
+              <div>
+                <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:"8px", flexWrap:"wrap", gap:"8px"}}>
+                  <div style={{display:"flex", alignItems:"center", gap:"8px"}}>
+                    <span style={{fontSize:"11px", letterSpacing:"0.12em", textTransform:"uppercase", color:"#6a7090", fontFamily:"monospace", fontWeight:"600"}}>Master Resume</span>
+                    <span style={{fontSize:"10px", background:"#eef2fb", color:"#3a6fd8", border:"1px solid #c8d8f8", padding:"2px 8px", borderRadius:"10px", fontFamily:"monospace"}}>your full experience</span>
+                  </div>
+                  <ModeToggle mode={resumeMode} setMode={setResumeMode}/>
+                </div>
+                {resumeMode==="upload"
+                  ? <FileUploadZone label="resume" onTextExtracted={setMasterResume} currentText={masterResume}/>
+                  : <><textarea value={masterResume} onChange={e=>setMasterResume(e.target.value)} placeholder={"Paste your complete resume here.\n\nInclude every job, skill, certification,\nand achievement."} style={{...taSt, height:"380px"}}/><Cnt n={masterResume.length}/></>
+                }
+                {resumeMode==="upload" && masterResume && (
+                  <div style={{marginTop:"8px"}}>
+                    <div style={{fontSize:"10px", color:"#a0a8c0", fontFamily:"monospace", marginBottom:"4px"}}>EXTRACTED TEXT PREVIEW:</div>
+                    <textarea value={masterResume} onChange={e=>setMasterResume(e.target.value)} style={{...taSt, height:"200px", fontSize:"11px"}}/>
+                    <Cnt n={masterResume.length}/>
+                  </div>
+                )}
+              </div>
+
+              {/* JD input */}
+              <div>
+                <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:"8px", flexWrap:"wrap", gap:"8px"}}>
+                  <div style={{display:"flex", alignItems:"center", gap:"8px"}}>
+                    <span style={{fontSize:"11px", letterSpacing:"0.12em", textTransform:"uppercase", color:"#6a7090", fontFamily:"monospace", fontWeight:"600"}}>Job Description</span>
+                    <span style={{fontSize:"10px", background:"#eef2fb", color:"#3a6fd8", border:"1px solid #c8d8f8", padding:"2px 8px", borderRadius:"10px", fontFamily:"monospace"}}>full JD preferred</span>
+                  </div>
+                  <ModeToggle mode={jdMode} setMode={setJdMode}/>
+                </div>
+                {jdMode==="upload"
+                  ? <FileUploadZone label="job description" onTextExtracted={setJobDescription} currentText={jobDescription}/>
+                  : <><textarea value={jobDescription} onChange={e=>setJobDescription(e.target.value)} placeholder={"Paste the full job description here.\n\nInclude responsibilities, requirements,\nand nice-to-haves."} style={{...taSt, height:"380px"}}/><Cnt n={jobDescription.length}/></>
+                }
+                {jdMode==="upload" && jobDescription && (
+                  <div style={{marginTop:"8px"}}>
+                    <div style={{fontSize:"10px", color:"#a0a8c0", fontFamily:"monospace", marginBottom:"4px"}}>EXTRACTED TEXT PREVIEW:</div>
+                    <textarea value={jobDescription} onChange={e=>setJobDescription(e.target.value)} style={{...taSt, height:"200px", fontSize:"11px"}}/>
+                    <Cnt n={jobDescription.length}/>
+                  </div>
+                )}
+              </div>
             </div>
 
             <div style={{textAlign:"center"}}>
@@ -192,7 +337,6 @@ export default function ResumeTailorPro() {
         {/* RESULT */}
         {stage===S.RESULT&&result&&(
           <div>
-            {/* Score bar */}
             <div style={{display:"flex", alignItems:"center", gap:"20px", marginBottom:"24px", padding:"18px 24px", background:"#ffffff", border:"1px solid #e0e4ef", borderRadius:"10px", flexWrap:"wrap", boxShadow:"0 2px 8px rgba(0,0,0,0.05)"}}>
               <div style={{textAlign:"center", minWidth:"70px", background:scoreBg(result.matchScore), borderRadius:"8px", padding:"10px 16px"}}>
                 <div style={{fontSize:"28px", fontFamily:"monospace", fontWeight:"700", color:scoreColor(result.matchScore), lineHeight:"1"}}>{result.matchScore}</div>
@@ -215,26 +359,19 @@ export default function ResumeTailorPro() {
               </div>
             </div>
 
-            {/* Tabs */}
             <div style={{display:"flex", borderBottom:"2px solid #e0e4ef", marginBottom:"22px", gap:"0", overflowX:"auto"}}>
               {[["resume","◈ Tailored Resume"],["cover","✉ Cover Letter"],["analysis","◆ Analysis"],["diff","⊕ Diff View"],["keywords","⊗ Keywords"]].map(([t,label])=>(
                 <button key={t} onClick={()=>setActiveTab(t)} style={{background:"transparent", border:"none", borderBottom:activeTab===t?"2px solid #3a6fd8":"2px solid transparent", color:activeTab===t?"#3a6fd8":"#a0a8c0", padding:"10px 20px", fontSize:"11px", fontFamily:"monospace", letterSpacing:"0.12em", textTransform:"uppercase", cursor:"pointer", marginBottom:"-2px", whiteSpace:"nowrap", fontWeight:activeTab===t?"600":"400"}}>{label}</button>
               ))}
             </div>
 
-            {/* Resume Tab */}
             {activeTab==="resume"&&(
               <div>
-                <div style={{background:"#ffffff", color:"#111", borderRadius:"8px", padding:"52px 60px", fontFamily:"Georgia,serif", fontSize:"13.5px", lineHeight:"1.8", whiteSpace:"pre-wrap", wordBreak:"break-word", border:"1px solid #e0e4ef", boxShadow:"0 4px 20px rgba(0,0,0,0.06)"}}>
-                  {result.tailoredResume}
-                </div>
-                <div style={{marginTop:"14px", padding:"12px 16px", background:"#fffbf0", border:"1px solid #f0e0b0", borderRadius:"6px", fontSize:"12px", color:"#7a6000", fontFamily:"monospace"}}>
-                  ⚠ Review before sending — verify all details are accurate and contact info is current.
-                </div>
+                <div style={{background:"#ffffff", color:"#111", borderRadius:"8px", padding:"52px 60px", fontFamily:"Georgia,serif", fontSize:"13.5px", lineHeight:"1.8", whiteSpace:"pre-wrap", wordBreak:"break-word", border:"1px solid #e0e4ef", boxShadow:"0 4px 20px rgba(0,0,0,0.06)"}}>{result.tailoredResume}</div>
+                <div style={{marginTop:"14px", padding:"12px 16px", background:"#fffbf0", border:"1px solid #f0e0b0", borderRadius:"6px", fontSize:"12px", color:"#7a6000", fontFamily:"monospace"}}>⚠ Review before sending — verify all details are accurate and contact info is current.</div>
               </div>
             )}
 
-            {/* Cover Letter Tab */}
             {activeTab==="cover"&&(
               <div>
                 <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:"14px", flexWrap:"wrap", gap:"10px"}}>
@@ -247,16 +384,11 @@ export default function ResumeTailorPro() {
                     <LBtn onClick={()=>exportToPDF(result.coverLetter,`Cover Letter – ${jobTitle||"Tailored"}`)}>Export PDF</LBtn>
                   </div>
                 </div>
-                <div style={{background:"#ffffff", color:"#111", borderRadius:"8px", padding:"52px 60px", fontFamily:"Georgia,serif", fontSize:"13.5px", lineHeight:"1.9", whiteSpace:"pre-wrap", wordBreak:"break-word", border:"1px solid #e0e4ef", boxShadow:"0 4px 20px rgba(0,0,0,0.06)"}}>
-                  {result.coverLetter}
-                </div>
-                <div style={{marginTop:"14px", padding:"12px 16px", background:"#eef2fb", border:"1px solid #c8d8f8", borderRadius:"6px", fontSize:"12px", color:"#2a4a8a", fontFamily:"monospace"}}>
-                  💡 Tip: Add your address and date at the top before sending. Personalize the opening line if you know the hiring manager's name.
-                </div>
+                <div style={{background:"#ffffff", color:"#111", borderRadius:"8px", padding:"52px 60px", fontFamily:"Georgia,serif", fontSize:"13.5px", lineHeight:"1.9", whiteSpace:"pre-wrap", wordBreak:"break-word", border:"1px solid #e0e4ef", boxShadow:"0 4px 20px rgba(0,0,0,0.06)"}}>{result.coverLetter}</div>
+                <div style={{marginTop:"14px", padding:"12px 16px", background:"#eef2fb", border:"1px solid #c8d8f8", borderRadius:"6px", fontSize:"12px", color:"#2a4a8a", fontFamily:"monospace"}}>💡 Tip: Add your address and date at the top. Personalize the opening if you know the hiring manager's name.</div>
               </div>
             )}
 
-            {/* Analysis Tab */}
             {activeTab==="analysis"&&(
               <div style={{background:"#ffffff", border:"1px solid #e0e4ef", borderRadius:"8px", padding:"28px 32px", boxShadow:"0 2px 8px rgba(0,0,0,0.04)"}}>
                 <h3 style={{fontSize:"11px", fontFamily:"monospace", letterSpacing:"0.18em", textTransform:"uppercase", color:"#3a6fd8", margin:"0 0 20px", fontWeight:"600"}}>Why this resume will land</h3>
@@ -269,11 +401,10 @@ export default function ResumeTailorPro() {
               </div>
             )}
 
-            {/* Diff Tab */}
             {activeTab==="diff"&&(
               <div style={{background:"#ffffff", border:"1px solid #e0e4ef", borderRadius:"8px", padding:"24px 28px", boxShadow:"0 2px 8px rgba(0,0,0,0.04)"}}>
                 <p style={{fontFamily:"monospace", fontSize:"11px", color:"#a0a8c0", marginTop:0, marginBottom:"16px"}}>
-                  <span style={{color:"#1a7a3c", fontWeight:"700"}}>+</span> Added / rewritten &nbsp;&nbsp;
+                  <span style={{color:"#1a7a3c", fontWeight:"700"}}>+</span> Added &nbsp;&nbsp;
                   <span style={{color:"#c0392b", fontWeight:"700"}}>−</span> Removed &nbsp;&nbsp;
                   <span style={{color:"#c0c8e0"}}>·</span> Unchanged
                 </p>
@@ -287,7 +418,6 @@ export default function ResumeTailorPro() {
               </div>
             )}
 
-            {/* Keywords Tab */}
             {activeTab==="keywords"&&(
               <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:"20px"}}>
                 <div style={{background:"#ffffff", border:"1px solid #e0e4ef", borderRadius:"8px", padding:"22px 26px", boxShadow:"0 2px 8px rgba(0,0,0,0.04)"}}>
@@ -319,7 +449,7 @@ export default function ResumeTailorPro() {
             <h2 style={{fontSize:"18px", fontWeight:"600", color:"#1a1a2e", marginBottom:"6px"}}>Saved Resumes</h2>
             <p style={{fontSize:"13px", color:"#a0a8c0", marginBottom:"24px"}}>{history.length} session{history.length!==1?"s":""} saved</p>
             {history.length===0
-              ? <div style={{textAlign:"center", padding:"80px", color:"#c0c8e0", fontFamily:"monospace", fontSize:"13px", background:"#ffffff", borderRadius:"10px", border:"1px solid #e0e4ef"}}>No history yet — tailor your first resume to see it here.</div>
+              ? <div style={{textAlign:"center", padding:"80px", color:"#c0c8e0", fontFamily:"monospace", fontSize:"13px", background:"#ffffff", borderRadius:"10px", border:"1px solid #e0e4ef"}}>No history yet.</div>
               : <div style={{display:"grid", gap:"10px"}}>
                   {history.map(e=>(
                     <div key={e.id} onClick={()=>loadFromHistory(e)} style={{background:"#ffffff", border:"1px solid #e0e4ef", borderRadius:"8px", padding:"18px 24px", display:"flex", alignItems:"center", gap:"18px", cursor:"pointer", transition:"all 0.2s", boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}
