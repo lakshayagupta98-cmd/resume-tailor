@@ -4,23 +4,27 @@ const STORAGE_KEY = "resumeTailorHistory";
 const loadHistory = () => { try { const r = localStorage.getItem(STORAGE_KEY); return r ? JSON.parse(r) : []; } catch { return []; } };
 const saveHistory = (items) => { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(items)); } catch {} };
 
-const SYSTEM_PROMPT = `You are an elite resume strategist and ATS optimization expert. Tailor the candidate's master resume to a specific job description. Reframe existing experience — never fabricate.
+const SYSTEM_PROMPT = `You are an elite resume strategist, ATS optimization expert, and professional cover letter writer. Given a master resume and job description, you will produce a tailored resume AND a professional cover letter.
 
 RULES:
 1. Never invent skills or experience not in the master resume
 2. Mirror exact language and keywords from the JD for ATS
 3. Lead bullets with strong action verbs + quantified impact where available
 4. Rewrite the professional summary specifically for this role
-5. Surface relevant tools/methodologies/domains from the JD prominently
-6. Remove or minimize irrelevant content
+5. Cover letter must be professional and formal in tone — 3-4 paragraphs
+6. Cover letter opening: reference the specific role and company, show genuine interest
+7. Cover letter body: connect 2-3 of the candidate's strongest experiences directly to the JD requirements
+8. Cover letter closing: confident call to action, express enthusiasm for next steps
+9. Cover letter should NOT repeat the resume word for word — it should tell a story
 
 Respond with valid JSON ONLY — no markdown, no backticks, no preamble:
 {
   "matchScore": <integer 0-100>,
   "analysis": ["insight 1","insight 2","insight 3","insight 4","insight 5"],
-  "keywordsMatched": ["kw1","kw2",...],
-  "keywordsMissing": ["gap1","gap2",...],
-  "tailoredResume": "full resume as plain text with \\n for newlines"
+  "keywordsMatched": ["kw1","kw2"],
+  "keywordsMissing": ["gap1","gap2"],
+  "tailoredResume": "full resume as plain text with \\n for newlines",
+  "coverLetter": "full cover letter as plain text with \\n for newlines"
 }`;
 
 function computeDiff(original, tailored) {
@@ -61,11 +65,12 @@ export default function ResumeTailorPro() {
   const [error, setError] = useState("");
   const [activeTab, setActiveTab] = useState("resume");
   const [copied, setCopied] = useState(false);
+  const [copiedCL, setCopiedCL] = useState(false);
   const [history, setHistory] = useState([]);
   const [dot, setDot] = useState(0);
   const [step, setStep] = useState(0);
 
-  const STEPS = ["Reading job description", "Matching your experience", "Optimizing for ATS", "Writing tailored resume"];
+  const STEPS = ["Reading job description", "Matching your experience", "Optimizing for ATS", "Writing resume & cover letter"];
 
   useEffect(() => { setHistory(loadHistory()); }, []);
 
@@ -98,7 +103,7 @@ export default function ResumeTailorPro() {
       const parsed = JSON.parse(raw.replace(/```json|```/g,"").trim());
       setResult(parsed);
       setActiveTab("resume");
-      const entry = { id:Date.now(), date:new Date().toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"}), jobTitle:jobTitle||"Untitled Role", company:company||"", matchScore:parsed.matchScore, tailoredResume:parsed.tailoredResume, analysis:parsed.analysis, keywordsMatched:parsed.keywordsMatched, keywordsMissing:parsed.keywordsMissing, originalResume:masterResume };
+      const entry = { id:Date.now(), date:new Date().toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"}), jobTitle:jobTitle||"Untitled Role", company:company||"", matchScore:parsed.matchScore, tailoredResume:parsed.tailoredResume, coverLetter:parsed.coverLetter, analysis:parsed.analysis, keywordsMatched:parsed.keywordsMatched, keywordsMissing:parsed.keywordsMissing, originalResume:masterResume };
       const updated = [entry,...history].slice(0,20);
       setHistory(updated); saveHistory(updated);
       setStage(S.RESULT);
@@ -108,6 +113,7 @@ export default function ResumeTailorPro() {
   };
 
   const handleCopy = () => { navigator.clipboard.writeText(result?.tailoredResume||""); setCopied(true); setTimeout(()=>setCopied(false),2000); };
+  const handleCopyCL = () => { navigator.clipboard.writeText(result?.coverLetter||""); setCopiedCL(true); setTimeout(()=>setCopiedCL(false),2000); };
   const handleReset = () => { setStage(S.INPUT); setResult(null); setError(""); setJobTitle(""); setJobDescription(""); setCompany(""); };
   const loadFromHistory = e => { setResult(e); setJobTitle(e.jobTitle); setCompany(e.company||""); setMasterResume(e.originalResume||""); setStage(S.RESULT); setActiveTab("resume"); };
   const diffLines = result ? computeDiff(masterResume, result.tailoredResume) : [];
@@ -139,7 +145,7 @@ export default function ResumeTailorPro() {
 
             <div style={{textAlign:"center", marginBottom:"32px"}}>
               <h1 style={{fontSize:"28px", fontWeight:"600", color:"#1a1a2e", margin:"0 0 8px"}}>AI Resume Tailor</h1>
-              <p style={{fontSize:"14px", color:"#6a7090", margin:0}}>Paste your resume + job description → get an ATS-optimized tailored resume in seconds</p>
+              <p style={{fontSize:"14px", color:"#6a7090", margin:0}}>Paste your resume + job description → get a tailored resume <span style={{color:"#3a6fd8", fontWeight:"600"}}>& cover letter</span> in seconds</p>
             </div>
 
             <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:"14px", marginBottom:"18px"}}>
@@ -160,9 +166,9 @@ export default function ResumeTailorPro() {
 
             <div style={{textAlign:"center"}}>
               <button onClick={handleTailor} style={primBtn} onMouseOver={e=>e.target.style.background="#2a5fc8"} onMouseOut={e=>e.target.style.background="#3a6fd8"}>
-                Tailor My Resume →
+                Tailor Resume + Generate Cover Letter →
               </button>
-              <p style={{fontSize:"11px", color:"#a0a8c0", fontFamily:"monospace", marginTop:"10px", letterSpacing:"0.06em"}}>ATS-optimized · keyword-matched · never fabricates experience</p>
+              <p style={{fontSize:"11px", color:"#a0a8c0", fontFamily:"monospace", marginTop:"10px", letterSpacing:"0.06em"}}>ATS-optimized · keyword-matched · cover letter included · never fabricates</p>
             </div>
           </div>
         )}
@@ -172,7 +178,7 @@ export default function ResumeTailorPro() {
           <div style={{textAlign:"center", padding:"100px 40px"}}>
             <div style={{width:"52px", height:"52px", border:"3px solid #e0e4ef", borderTop:"3px solid #3a6fd8", borderRadius:"50%", margin:"0 auto 36px", animation:"spin 0.9s linear infinite"}}/>
             <h2 style={{fontSize:"18px", fontWeight:"500", color:"#1a1a2e", marginBottom:"10px"}}>Analyzing & Tailoring{".".repeat(dot)}</h2>
-            <p style={{color:"#a0a8c0", fontSize:"13px", marginBottom:"36px"}}>This takes about 20–30 seconds</p>
+            <p style={{color:"#a0a8c0", fontSize:"13px", marginBottom:"36px"}}>Generating your resume + cover letter — about 30 seconds</p>
             <div style={{display:"flex", justifyContent:"center", gap:"10px", flexWrap:"wrap"}}>
               {STEPS.map((s,i)=>(
                 <div key={i} style={{padding:"7px 16px", background: i<=step?"#eef2fb":"#ffffff", border:`1px solid ${i<=step?"#3a6fd8":"#e0e4ef"}`, borderRadius:"20px", fontSize:"12px", color: i<=step?"#3a6fd8":"#c0c8e0", fontFamily:"monospace", transition:"all 0.4s ease"}}>
@@ -203,6 +209,7 @@ export default function ResumeTailorPro() {
               </div>
               <div style={{display:"flex", gap:"8px", flexWrap:"wrap"}}>
                 <LBtn onClick={handleCopy} green={copied}>{copied?"✓ Copied":"Copy Resume"}</LBtn>
+                <LBtn onClick={handleCopyCL} green={copiedCL}>{copiedCL?"✓ Copied":"Copy Cover Letter"}</LBtn>
                 <LBtn onClick={()=>exportToPDF(result.tailoredResume,`Resume – ${jobTitle||"Tailored"}`)}>Export PDF</LBtn>
                 <LBtn onClick={handleReset} muted>New JD →</LBtn>
               </div>
@@ -210,7 +217,7 @@ export default function ResumeTailorPro() {
 
             {/* Tabs */}
             <div style={{display:"flex", borderBottom:"2px solid #e0e4ef", marginBottom:"22px", gap:"0", overflowX:"auto"}}>
-              {[["resume","◈ Tailored Resume"],["analysis","◆ Analysis"],["diff","⊕ Diff View"],["keywords","⊗ Keywords"]].map(([t,label])=>(
+              {[["resume","◈ Tailored Resume"],["cover","✉ Cover Letter"],["analysis","◆ Analysis"],["diff","⊕ Diff View"],["keywords","⊗ Keywords"]].map(([t,label])=>(
                 <button key={t} onClick={()=>setActiveTab(t)} style={{background:"transparent", border:"none", borderBottom:activeTab===t?"2px solid #3a6fd8":"2px solid transparent", color:activeTab===t?"#3a6fd8":"#a0a8c0", padding:"10px 20px", fontSize:"11px", fontFamily:"monospace", letterSpacing:"0.12em", textTransform:"uppercase", cursor:"pointer", marginBottom:"-2px", whiteSpace:"nowrap", fontWeight:activeTab===t?"600":"400"}}>{label}</button>
               ))}
             </div>
@@ -223,6 +230,28 @@ export default function ResumeTailorPro() {
                 </div>
                 <div style={{marginTop:"14px", padding:"12px 16px", background:"#fffbf0", border:"1px solid #f0e0b0", borderRadius:"6px", fontSize:"12px", color:"#7a6000", fontFamily:"monospace"}}>
                   ⚠ Review before sending — verify all details are accurate and contact info is current.
+                </div>
+              </div>
+            )}
+
+            {/* Cover Letter Tab */}
+            {activeTab==="cover"&&(
+              <div>
+                <div style={{display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:"14px", flexWrap:"wrap", gap:"10px"}}>
+                  <div>
+                    <h3 style={{fontSize:"13px", fontFamily:"monospace", letterSpacing:"0.12em", textTransform:"uppercase", color:"#3a6fd8", margin:"0 0 4px", fontWeight:"600"}}>✉ Cover Letter</h3>
+                    <p style={{fontSize:"11px", color:"#a0a8c0", margin:0, fontFamily:"monospace"}}>Professional & formal — tailored to {jobTitle||"this role"}{company?` at ${company}`:""}</p>
+                  </div>
+                  <div style={{display:"flex", gap:"8px"}}>
+                    <LBtn onClick={handleCopyCL} green={copiedCL}>{copiedCL?"✓ Copied":"Copy Letter"}</LBtn>
+                    <LBtn onClick={()=>exportToPDF(result.coverLetter,`Cover Letter – ${jobTitle||"Tailored"}`)}>Export PDF</LBtn>
+                  </div>
+                </div>
+                <div style={{background:"#ffffff", color:"#111", borderRadius:"8px", padding:"52px 60px", fontFamily:"Georgia,serif", fontSize:"13.5px", lineHeight:"1.9", whiteSpace:"pre-wrap", wordBreak:"break-word", border:"1px solid #e0e4ef", boxShadow:"0 4px 20px rgba(0,0,0,0.06)"}}>
+                  {result.coverLetter}
+                </div>
+                <div style={{marginTop:"14px", padding:"12px 16px", background:"#eef2fb", border:"1px solid #c8d8f8", borderRadius:"6px", fontSize:"12px", color:"#2a4a8a", fontFamily:"monospace"}}>
+                  💡 Tip: Add your address and date at the top before sending. Personalize the opening line if you know the hiring manager's name.
                 </div>
               </div>
             )}
@@ -304,7 +333,10 @@ export default function ResumeTailorPro() {
                         <div style={{fontSize:"15px", fontWeight:"600", color:"#1a1a2e", marginBottom:"3px"}}>{e.jobTitle}</div>
                         <div style={{fontSize:"12px", color:"#a0a8c0", fontFamily:"monospace"}}>{e.company&&`${e.company} · `}{e.date}</div>
                       </div>
-                      <span style={{fontSize:"11px", color:"#3a6fd8", fontFamily:"monospace", fontWeight:"600"}}>Load →</span>
+                      <div style={{display:"flex", alignItems:"center", gap:"8px"}}>
+                        {e.coverLetter && <span style={{fontSize:"10px", background:"#eef2fb", color:"#3a6fd8", padding:"3px 8px", borderRadius:"10px", fontFamily:"monospace"}}>✉ CL</span>}
+                        <span style={{fontSize:"11px", color:"#3a6fd8", fontFamily:"monospace", fontWeight:"600"}}>Load →</span>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -349,12 +381,6 @@ function LBtn({onClick,children,green,muted}){
     <button onClick={onClick} style={{background:bg,color:col,border:"none",padding:"8px 18px",fontSize:"11px",fontFamily:"monospace",letterSpacing:"0.1em",cursor:"pointer",borderRadius:"6px",fontWeight:"600",transition:"all 0.2s"}}>
       {children}
     </button>
-  );
-}
-
-function navBtn_component({onClick,children}){
-  return(
-    <button onClick={onClick} style={navBtn}>{children}</button>
   );
 }
 
